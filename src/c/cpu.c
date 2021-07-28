@@ -27,6 +27,9 @@ int main(int argc, char *argv[])
 	(void)argv;
 	MPI_Init(NULL, NULL);
 
+	MPI_Status statuses[4];
+	MPI_Request request[4];
+
 	/////////////////////////////////////////////////////
 	// -- PREPARATION 1: COLLECT USEFUL INFORMATION -- //
 	/////////////////////////////////////////////////////
@@ -116,7 +119,8 @@ int main(int argc, char *argv[])
 		MPI_Recv(&temperatures_last[1][0], ROWS_PER_MPI_PROCESS * COLUMNS_PER_MPI_PROCESS, MPI_DOUBLE, MASTER_PROCESS_RANK, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 	}
 
-	// Copy the temperatures into the current iteration temperature as well
+// Copy the temperatures into the current iteration temperature as well
+#pragma omp parallel for collapse(2)
 	for (int i = 1; i <= ROWS_PER_MPI_PROCESS; i++)
 	{
 		for (int j = 0; j < COLUMNS_PER_MPI_PROCESS; j++)
@@ -152,17 +156,19 @@ int main(int argc, char *argv[])
 		// -- SUBTASK 1: EXCHANGE GHOST CELLS -- //
 		// ////////////////////////////////////////
 
-		// Send data to up neighbour for its ghost cells. If my up_neighbour_rank is MPI_PROC_NULL, this MPI_Ssend will do nothing.
-		MPI_Ssend(&temperatures[1][0], COLUMNS_PER_MPI_PROCESS, MPI_DOUBLE, up_neighbour_rank, 0, MPI_COMM_WORLD);
-
 		// Receive data from down neighbour to fill our ghost cells. If my down_neighbour_rank is MPI_PROC_NULL, this MPI_Recv will do nothing.
-		MPI_Recv(&temperatures_last[ROWS_PER_MPI_PROCESS + 1][0], COLUMNS_PER_MPI_PROCESS, MPI_DOUBLE, down_neighbour_rank, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-		// Send data to down neighbour for its ghost cells. If my down_neighbour_rank is MPI_PROC_NULL, this MPI_Ssend will do nothing.
-		MPI_Ssend(&temperatures[ROWS_PER_MPI_PROCESS][0], COLUMNS_PER_MPI_PROCESS, MPI_DOUBLE, down_neighbour_rank, 0, MPI_COMM_WORLD);
+		MPI_Irecv(&temperatures_last[ROWS_PER_MPI_PROCESS + 1][0], COLUMNS_PER_MPI_PROCESS, MPI_DOUBLE, down_neighbour_rank, MPI_ANY_TAG, MPI_COMM_WORLD, &request[0]);
 
 		// Receive data from up neighbour to fill our ghost cells. If my up_neighbour_rank is MPI_PROC_NULL, this MPI_Recv will do nothing.
-		MPI_Recv(&temperatures_last[0][0], COLUMNS_PER_MPI_PROCESS, MPI_DOUBLE, up_neighbour_rank, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+		MPI_Irecv(&temperatures_last[0][0], COLUMNS_PER_MPI_PROCESS, MPI_DOUBLE, up_neighbour_rank, MPI_ANY_TAG, MPI_COMM_WORLD, &request[1]);
+
+		// Send data to up neighbour for its ghost cells. If my up_neighbour_rank is MPI_PROC_NULL, this MPI_Ssend will do nothing.
+		MPI_Isend(&temperatures[1][0], COLUMNS_PER_MPI_PROCESS, MPI_DOUBLE, up_neighbour_rank, 0, MPI_COMM_WORLD, &request[2]);
+
+		// Send data to down neighbour for its ghost cells. If my down_neighbour_rank is MPI_PROC_NULL, this MPI_Ssend will do nothing.
+		MPI_Isend(&temperatures[ROWS_PER_MPI_PROCESS][0], COLUMNS_PER_MPI_PROCESS, MPI_DOUBLE, down_neighbour_rank, 0, MPI_COMM_WORLD, &request[3]);
+
+		MPI_Waitall(4, request, statuses);
 
 		/////////////////////////////////////////////
 		// -- SUBTASK 2: PROPAGATE TEMPERATURES -- //
